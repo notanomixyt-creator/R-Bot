@@ -4,9 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 
-require("dotenv").config({
-  path: path.join(__dirname, ".env"),
-});
+require("dotenv").config({ path: path.join(__dirname, ".env") });
 
 const {
   Client,
@@ -29,17 +27,23 @@ const {
   InteractionContextType,
   MediaGalleryBuilder,
   MediaGalleryItemBuilder,
+  SectionBuilder,
+  ThumbnailBuilder,
 } = require("discord.js");
 
 /* -------------------------------------------------------------------------- */
 /* Configuration                                                              */
 /* -------------------------------------------------------------------------- */
 
-function normalizeId(value) {
-  const id = String(value ?? "")
-    .trim()
-    .replace(/^['"]|['"]$/g, "");
+const BOT_NAME = "Larpify";
+const SUPPORT_SERVER_INVITE = "https://discord.gg/aBsPJHGWPE";
+const PROCESS_STARTED_AT_MS = Date.now();
+const BATCH_SIZE = 5;
+const CUSTOM_SESSION_TTL_MS = 15 * 60 * 1000;
+const SUPPORT_CACHE_TTL_MS = 15 * 1000;
 
+function normalizeId(value) {
+  const id = String(value ?? "").trim().replace(/^['"]|['"]$/g, "");
   return /^\d{17,20}$/.test(id) ? id : "";
 }
 
@@ -52,14 +56,6 @@ const LOG_CHANNEL_ID = normalizeId(process.env.LOG_CHANNEL_ID);
 const LINK_USED_CHANNEL_ID = normalizeId(process.env.LINK_USED_CHANNEL_ID);
 const BOT_AUTOMOD_CHANNEL_ID = normalizeId(process.env.BOT_AUTOMOD_CHANNEL_ID);
 const PEXELS_API_KEY = process.env.PEXELS_API_KEY?.trim();
-
-const SUPPORT_SERVER_INVITE = "https://discord.gg/aBsPJHGWPE";
-
-const NITRO_IMAGE_URL =
-  "https://cdn.discordapp.com/attachments/1539084725073744002/1539566265587343410/discord-nitro.png?ex=6a877111&is=6a861f91&hm=d97ffeda66d1fb663acc5d5ca95d6ed36e502892981c29a0d55c05d6af27c2e8&";
-
-const BANNED_IMAGE_URL =
-  "https://cdn.discordapp.com/attachments/1539084725073744002/1539566289994125382/discord-banned.jpg?ex=6a877117&is=6a861f97&hm=4d51bf8dbb3f62e8d5300c0a57d483a00e19b399f98009ab59a64274926fda51&";
 
 const requiredEnv = {
   TOKEN,
@@ -74,122 +70,38 @@ const requiredEnv = {
 };
 
 for (const [name, value] of Object.entries(requiredEnv)) {
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
+  if (!value) throw new Error(`Missing required environment variable: ${name}`);
 }
 
-/* -------------------------------------------------------------------------- */
-/* Mentions                                                                   */
-/* -------------------------------------------------------------------------- */
+const ALLOWED_MENTIONS_ALL = Object.freeze({ parse: ["users", "roles", "everyone"] });
+const ALLOWED_MENTIONS_NONE = Object.freeze({ parse: [] });
 
-const ALLOWED_MENTIONS_ALL = Object.freeze({
-  parse: ["users", "roles", "everyone"],
-});
-
-const ALLOWED_MENTIONS_NONE = Object.freeze({
-  parse: [],
-});
-
-/* -------------------------------------------------------------------------- */
-/* Lag / spam                                                                 */
-/* -------------------------------------------------------------------------- */
-
-const LAG_MESSAGES = {
+const LAG_MESSAGES = Object.freeze({
   1: process.env.LAG_TYPE_1?.trim() || null,
   2: process.env.LAG_TYPE_2?.trim() || null,
   3: process.env.LAG_TYPE_3?.trim() || null,
   4: process.env.LAG_TYPE_4?.trim() || null,
-};
+});
 
 const SPAM_TEMPLATE = `# [Larpify](https://discord.gg/aBsPJHGWPE)
-## **Powerful Discord Bots**
+## Powerful N & R Bots, Made With AI.
 
-### • Fast & Reliable
-### • Built For Discord Communities
-### • And More...
+### - Powerful Discord Bots
+### - Fast & Reliable
+### - AI-Powered Features
+### - Built For Discord Communities
+### - And More...
 
 -# @everyone`;
 
-/* -------------------------------------------------------------------------- */
-/* Auto moderation                                                            */
-/* -------------------------------------------------------------------------- */
-
-const BAD_WORD_PATTERNS = [
-  /\bsex\b/i,
-  /\bnigga\b/i,
-  /\bnigger\b/i,
-  /\brape\b/i,
-  /\bporn\b/i,
-  /\bfuck\b/i,
-  /\bfucking\b/i,
-  /\bbitch\b/i,
-  /\bslut\b/i,
-  /\bwhore\b/i,
-  /\bcunt\b/i,
-  /\bdick\b/i,
-  /\bpussy\b/i,
-  /\bpedophile\b/i,
-  /\bpedo\b/i,
-  /\bcsam\b/i,
-];
-
-const URL_PATTERN =
-  /(?:^|[\s<(\[])(?:(?:https?|ftp):\/\/|www\.|(?:discord\.gg|discord\.com\/invite\/)|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,})(?:[^\s<>()\]"']*)/gi;
-
-function findBadWord(content) {
-  const value = String(content ?? "");
-
-  for (const pattern of BAD_WORD_PATTERNS) {
-    pattern.lastIndex = 0;
-    const match = value.match(pattern);
-    pattern.lastIndex = 0;
-
-    if (match?.[0]) {
-      return match[0];
-    }
-  }
-
-  return null;
-}
-
-function extractLinks(content) {
-  const matches = String(content ?? "").match(URL_PATTERN) || [];
-  const links = [];
-
-  for (const raw of matches) {
-    const cleaned = raw
-      .trim()
-      .replace(/^[<([\[]+/, "")
-      .replace(/[>\])},.!?]+$/g, "");
-
-    if (cleaned && !links.includes(cleaned)) {
-      links.push(cleaned);
-    }
-  }
-
-  return links;
-}
-
-function cleanInline(value, maxLength = 900) {
-  const output = String(value ?? "")
-    .replace(/[`]/g, "'")
-    .replace(/\r?\n/g, " ")
-    .trim();
-
-  return output.length <= maxLength
-    ? output
-    : `${output.slice(0, maxLength - 3)}...`;
-}
+const NITRO_IMAGE_URL =
+  "https://cdn.discordapp.com/attachments/1539084725073744002/1539566265587343410/discord-nitro.png?ex=6a877111&is=6a861f91&hm=d97ffeda66d1fb663acc5d5ca95d6ed36e502892981c29a0d55c05d6af27c2e8&";
 
 /* -------------------------------------------------------------------------- */
 /* Client                                                                     */
 /* -------------------------------------------------------------------------- */
 
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
-});
-
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 
 /* -------------------------------------------------------------------------- */
@@ -199,32 +111,20 @@ const rest = new REST({ version: "10" }).setToken(TOKEN);
 const DATA_DIR = path.join(__dirname, "data");
 const TOS_PATH = path.join(DATA_DIR, "tos.json");
 const BLACKLIST_PATH = path.join(DATA_DIR, "blacklist.json");
+const PROFILE_PATH = path.join(DATA_DIR, "profiles.json");
 
 function ensureDataDirectory() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
-
-  if (!fs.existsSync(TOS_PATH)) {
-    fs.writeFileSync(TOS_PATH, "{}\n", "utf8");
-  }
-
-  if (!fs.existsSync(BLACKLIST_PATH)) {
-    fs.writeFileSync(BLACKLIST_PATH, "[]\n", "utf8");
-  }
+  if (!fs.existsSync(TOS_PATH)) fs.writeFileSync(TOS_PATH, "{}\n", "utf8");
+  if (!fs.existsSync(BLACKLIST_PATH)) fs.writeFileSync(BLACKLIST_PATH, "[]\n", "utf8");
+  if (!fs.existsSync(PROFILE_PATH)) fs.writeFileSync(PROFILE_PATH, "{}\n", "utf8");
 }
 
 ensureDataDirectory();
 
 function readJson(filePath, fallback) {
   try {
-    if (!fs.existsSync(filePath)) {
-      fs.writeFileSync(
-        filePath,
-        `${JSON.stringify(fallback, null, 2)}\n`,
-        "utf8"
-      );
-      return fallback;
-    }
-
+    if (!fs.existsSync(filePath)) return fallback;
     const raw = fs.readFileSync(filePath, "utf8").trim();
     return raw ? JSON.parse(raw) : fallback;
   } catch (error) {
@@ -234,105 +134,240 @@ function readJson(filePath, fallback) {
 }
 
 function writeJson(filePath, value) {
-  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   try {
-    fs.writeFileSync(
-      temporaryPath,
-      `${JSON.stringify(value, null, 2)}\n`,
-      "utf8"
-    );
-
-    fs.renameSync(temporaryPath, filePath);
+    fs.writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    fs.renameSync(tempPath, filePath);
     return true;
   } catch (error) {
     console.error(`Failed to write ${filePath}:`, error);
-
-    try {
-      if (fs.existsSync(temporaryPath)) {
-        fs.unlinkSync(temporaryPath);
-      }
-    } catch {}
-
+    try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch {}
     return false;
   }
 }
 
-const rawTos = readJson(TOS_PATH, {});
-const tosData =
-  rawTos &&
-  typeof rawTos === "object" &&
-  !Array.isArray(rawTos)
-    ? rawTos
-    : {};
+const loadedTos = readJson(TOS_PATH, {});
+const tosData = loadedTos && typeof loadedTos === "object" && !Array.isArray(loadedTos) ? loadedTos : {};
 
-const rawBlacklist = readJson(BLACKLIST_PATH, []);
+const loadedBlacklist = readJson(BLACKLIST_PATH, []);
 const blacklistedUsers = new Set(
-  Array.isArray(rawBlacklist)
-    ? rawBlacklist
-        .map(String)
-        .filter((id) => Boolean(normalizeId(id)))
+  Array.isArray(loadedBlacklist)
+    ? loadedBlacklist.map(String).filter((id) => normalizeId(id))
     : []
 );
 
-function saveTos() {
-  return writeJson(TOS_PATH, tosData);
-}
+const loadedProfiles = readJson(PROFILE_PATH, {});
+const profileData = loadedProfiles && typeof loadedProfiles === "object" && !Array.isArray(loadedProfiles)
+  ? loadedProfiles
+  : {};
 
-function saveBlacklist() {
-  return writeJson(BLACKLIST_PATH, [...blacklistedUsers]);
-}
+const saveTos = () => writeJson(TOS_PATH, tosData);
+const saveBlacklist = () => writeJson(BLACKLIST_PATH, [...blacklistedUsers]);
+const saveProfiles = () => writeJson(PROFILE_PATH, profileData);
 
 /* -------------------------------------------------------------------------- */
-/* Session / cooldown state                                                   */
+/* In-memory state                                                            */
 /* -------------------------------------------------------------------------- */
 
 const customSpamSessions = new Map();
-const buttonCooldowns = new Map();
-
-const SESSION_TTL = 15 * 60 * 1000;
-const BUTTON_COOLDOWN = 2500;
+const supportMemberCache = new Map();
+const fakeIpHistory = new Map();
 
 function createCustomSession(userId, content) {
-  const sessionId = crypto.randomUUID();
-  const expiresAt = Date.now() + SESSION_TTL;
-
-  customSpamSessions.set(sessionId, {
+  const id = crypto.randomUUID();
+  customSpamSessions.set(id, {
     userId,
-    content,
-    expiresAt,
+    content: String(content).slice(0, 2000),
+    expiresAt: Date.now() + CUSTOM_SESSION_TTL_MS,
   });
-
-  const timer = setTimeout(() => {
-    customSpamSessions.delete(sessionId);
-  }, SESSION_TTL);
-
-  timer.unref?.();
-
-  return sessionId;
+  return id;
 }
 
 function cleanupSessions() {
   const now = Date.now();
-
-  for (const [sessionId, session] of customSpamSessions) {
-    if (!session || now >= session.expiresAt) {
-      customSpamSessions.delete(sessionId);
-    }
+  for (const [id, session] of customSpamSessions) {
+    if (!session || now >= session.expiresAt) customSpamSessions.delete(id);
   }
 }
 
-function getCooldown(userId, action) {
-  const key = `${userId}:${action}`;
-  const now = Date.now();
-  const expiresAt = buttonCooldowns.get(key) || 0;
+function getProfile(userId, username) {
+  const key = String(userId);
+  if (!profileData[key] || typeof profileData[key] !== "object") {
+    profileData[key] = {
+      username: String(username || "Unknown User"),
+      commands: 0,
+      commandCounts: {},
+      lastActiveAt: null,
+      updatedAt: Date.now(),
+    };
+  }
+  profileData[key].username = String(username || profileData[key].username || "Unknown User");
+  profileData[key].commandCounts = profileData[key].commandCounts && typeof profileData[key].commandCounts === "object"
+    ? profileData[key].commandCounts
+    : {};
+  return profileData[key];
+}
 
-  if (now < expiresAt) {
-    return Math.ceil((expiresAt - now) / 1000);
+function recordCommandActivity(interaction) {
+  if (!interaction?.isChatInputCommand?.()) return;
+  if (interaction.commandName === "profile") return;
+
+  const profile = getProfile(interaction.user.id, interaction.user.username);
+  const command = interaction.commandName;
+  profile.commands = Number(profile.commands || 0) + 1;
+  profile.commandCounts[command] = Number(profile.commandCounts[command] || 0) + 1;
+  profile.lastActiveAt = Date.now();
+  profile.updatedAt = Date.now();
+
+  setImmediate(() => saveProfiles());
+}
+
+function mostUsedCommand(profile) {
+  const entries = Object.entries(profile?.commandCounts || {})
+    .map(([name, count]) => [name, Number(count)])
+    .filter(([, count]) => count > 0)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+
+  return entries[0] || ["None", 0];
+}
+
+/* -------------------------------------------------------------------------- */
+/* Automod                                                                    */
+/* -------------------------------------------------------------------------- */
+
+const ZERO_WIDTH_RE = /[\u200B-\u200D\uFEFF\u2060\u2061\u2062\u2063\u2064\u2065\u2066\u2067\u2068\u2069\u206A-\u206F]/g;
+const BIDI_RE = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
+const CONTROL_RE = /[\u0000-\u001F\u007F]/g;
+const COMBINING_RE = /\p{M}/gu;
+
+// A small, deliberate homoglyph table helps detect obvious Unicode disguises
+// without turning every non-ASCII message into a moderation hit.
+const HOMOGLYPH_MAP = new Map([
+  ["а", "a"], ["А", "a"], ["е", "e"], ["Е", "e"], ["о", "o"], ["О", "o"],
+  ["р", "p"], ["Р", "p"], ["с", "c"], ["С", "c"], ["х", "x"], ["Х", "x"],
+  ["у", "y"], ["У", "y"], ["і", "i"], ["І", "i"], ["ј", "j"], ["Ј", "j"],
+  ["ι", "i"], ["Ι", "i"], ["κ", "k"], ["Κ", "k"], ["ν", "v"], ["Ν", "n"],
+  ["ο", "o"], ["Ο", "o"], ["ρ", "p"], ["Ρ", "p"], ["τ", "t"], ["Τ", "t"],
+]);
+
+const LEET_MAP = new Map([
+  ["0", "o"], ["1", "i"], ["2", "z"], ["3", "e"], ["4", "a"],
+  ["5", "s"], ["6", "g"], ["7", "t"], ["8", "b"], ["9", "g"],
+  ["@", "a"], ["$", "s"], ["!", "i"],
+]);
+
+const BAD_WORD_PATTERNS = Object.freeze([
+  { label: "Sexual Content", regex: /\bsex(?:ual|ually)?\b/i },
+  { label: "Hate Slur", regex: /\bnigg(?:a|er)\b/i },
+  { label: "Sexual Violence", regex: /\brap(?:e|ist|ing)\b/i },
+  { label: "Pornography", regex: /\bporn(?:o|ography)?\b/i },
+  { label: "Profanity", regex: /\bf+u+c+k+(?:ing|ed|er)?\b/i },
+  { label: "Profanity", regex: /\bb+i+t+c+h+\b/i },
+  { label: "Profanity", regex: /\bs+l+u+t+\b/i },
+  { label: "Profanity", regex: /\bw+h+o+r+e+\b/i },
+  { label: "Profanity", regex: /\bc+u+n+t+\b/i },
+  { label: "Profanity", regex: /\bd+i+c+k+\b/i },
+  { label: "Profanity", regex: /\bp+u+s+s+y+\b/i },
+  { label: "Child Safety", regex: /\bped(?:o|ophile)\b/i },
+  { label: "Child Sexual Abuse", regex: /\bcsa+m\b/i },
+  { label: "Child Sexual Abuse", regex: /\bchild\s*(?:sexual|porn|abuse)\b/i },
+  { label: "Sexual Content", regex: /\b(?:sexual|nude|explicit)\s*(?:minor|child|kid)\b/i },
+  { label: "Graphic Content", regex: /\bgore\b/i },
+]);
+
+const COMPACT_NEEDLES = Object.freeze([
+  ["sex", "Sexual Content"],
+  ["nigga", "Hate Slur"],
+  ["nigger", "Hate Slur"],
+  ["rape", "Sexual Violence"],
+  ["porn", "Pornography"],
+  ["fuck", "Profanity"],
+  ["bitch", "Profanity"],
+  ["slut", "Profanity"],
+  ["whore", "Profanity"],
+  ["cunt", "Profanity"],
+  ["dick", "Profanity"],
+  ["pussy", "Profanity"],
+  ["pedophile", "Child Safety"],
+  ["pedo", "Child Safety"],
+  ["csam", "Child Sexual Abuse"],
+  ["gore", "Graphic Content"],
+]);
+
+const URL_PATTERN = /(?:https?:\/\/|www\.|(?:discord\.gg|discord\.com\/invite\/)|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,})(?:[^\s<>()\[\]{}"']*)/gi;
+
+function applyUnicodeMap(value) {
+  let output = "";
+  for (const char of value) {
+    output += HOMOGLYPH_MAP.get(char) ?? char;
+  }
+  return output;
+}
+
+function normalizeForModeration(content) {
+  let value = applyUnicodeMap(String(content ?? "")
+    .normalize("NFKD")
+    .replace(COMBINING_RE, "")
+    .replace(ZERO_WIDTH_RE, "")
+    .replace(BIDI_RE, "")
+    .replace(CONTROL_RE, "")
+    .toLowerCase());
+
+  let mapped = "";
+  for (const char of value) mapped += LEET_MAP.get(char) ?? char;
+
+  const spaced = mapped
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const compact = spaced.replace(/\s+/g, "");
+  const collapsed = compact.replace(/(.)\1{2,}/g, "$1$1");
+  const alnumRuns = spaced.split(" ").filter(Boolean);
+
+  return { spaced, compact, collapsed, alnumRuns };
+}
+
+function findBadWord(content) {
+  const forms = normalizeForModeration(content);
+
+  for (const rule of BAD_WORD_PATTERNS) {
+    if (rule.regex.test(forms.spaced) || rule.regex.test(forms.collapsed)) {
+      return rule.label;
+    }
   }
 
-  buttonCooldowns.set(key, now + BUTTON_COOLDOWN);
-  return 0;
+  for (const [needle, label] of COMPACT_NEEDLES) {
+    if (forms.compact.includes(needle)) return label;
+  }
+
+  // Catch single-letter separator obfuscation such as f.u.c.k while avoiding
+  // very broad substring matching across ordinary sentences.
+  for (const run of forms.alnumRuns) {
+    if (run.length < 3 || run.length > 32) continue;
+    for (const [needle, label] of COMPACT_NEEDLES) {
+      if (run === needle || (run.length <= needle.length + 3 && run.includes(needle))) {
+        return label;
+      }
+    }
+  }
+
+  return null;
+}
+
+function extractLinks(content) {
+  const matches = String(content ?? "").match(URL_PATTERN) || [];
+  const unique = new Set();
+
+  for (const raw of matches) {
+    const cleaned = raw
+      .trim()
+      .replace(/^[<([\[]+/, "")
+      .replace(/[>\])},.!?]+$/g, "");
+    if (cleaned) unique.add(cleaned);
+  }
+
+  return [...unique];
 }
 
 /* -------------------------------------------------------------------------- */
@@ -340,13 +375,10 @@ function getCooldown(userId, action) {
 /* -------------------------------------------------------------------------- */
 
 const V2 = MessageFlags.IsComponentsV2;
-const EPHEMERAL_V2 =
-  MessageFlags.Ephemeral | MessageFlags.IsComponentsV2;
+const EPHEMERAL_V2 = MessageFlags.Ephemeral | MessageFlags.IsComponentsV2;
 
-function text(value) {
-  return new TextDisplayBuilder().setContent(
-    String(value ?? "").trim()
-  );
+function text(content) {
+  return new TextDisplayBuilder().setContent(String(content ?? "").trim());
 }
 
 function divider() {
@@ -355,93 +387,13 @@ function divider() {
     .setSpacing(SeparatorSpacingSize.Small);
 }
 
-function createContainer(title, body, details = null) {
-  const result = new ContainerBuilder()
-    .clearAccentColor()
-    .addTextDisplayComponents(text(`# ${title}`))
-    .addSeparatorComponents(divider())
-    .addTextDisplayComponents(text(body));
-
-  if (details) {
-    result
-      .addSeparatorComponents(divider())
-      .addTextDisplayComponents(text(details));
-  }
-
-  return result;
-}
-
-function ephemeralPanel(
-  title,
-  body,
-  details = null,
-  allowedMentions = ALLOWED_MENTIONS_NONE
-) {
-  return {
-    flags: EPHEMERAL_V2,
-    components: [createContainer(title, body, details)],
-    allowedMentions,
-  };
-}
-
-function publicPanel(
-  title,
-  body,
-  details = null,
-  allowedMentions = ALLOWED_MENTIONS_NONE
-) {
-  return {
-    flags: V2,
-    components: [createContainer(title, body, details)],
-    allowedMentions,
-  };
-}
-
-function imagePanel(
-  title,
-  imageUrl,
-  footer = null,
-  buttons = [],
-  allowedMentions = ALLOWED_MENTIONS_NONE
-) {
-  const gallery = new MediaGalleryBuilder().addItems(
-    new MediaGalleryItemBuilder().setURL(imageUrl)
-  );
-
-  const result = new ContainerBuilder()
-    .clearAccentColor()
-    .addTextDisplayComponents(text(`# ${title}`))
-    .addSeparatorComponents(divider())
-    .addMediaGalleryComponents(gallery);
-
-  if (footer) {
-    result
-      .addSeparatorComponents(divider())
-      .addTextDisplayComponents(text(footer));
-  }
-
-  if (buttons.length) {
-    result.addActionRowComponents(
-      new ActionRowBuilder().addComponents(...buttons)
-    );
-  }
-
-  return {
-    flags: V2,
-    components: [result],
-    allowedMentions,
-  };
-}
-
-/* -------------------------------------------------------------------------- */
-/* Buttons                                                                    */
-/* -------------------------------------------------------------------------- */
-
-function secondaryButton(customId, label) {
-  return new ButtonBuilder()
+function neutralButton(customId, label, disabled = false) {
+  const button = new ButtonBuilder()
     .setCustomId(customId)
     .setLabel(label)
     .setStyle(ButtonStyle.Secondary);
+  if (disabled) button.setDisabled(true);
+  return button;
 }
 
 function linkButton(label, url) {
@@ -451,27 +403,42 @@ function linkButton(label, url) {
     .setURL(url);
 }
 
-function buttonPanel(title, body, buttons) {
-  const result = new ContainerBuilder()
-    .clearAccentColor()
-    .addTextDisplayComponents(text(`# ${title}`))
-    .addSeparatorComponents(divider())
-    .addTextDisplayComponents(text(body))
-    .addActionRowComponents(
-      new ActionRowBuilder().addComponents(...buttons)
-    );
+function makeContainer(title, body = null, details = null) {
+  const container = new ContainerBuilder().clearAccentColor();
+  container.addTextDisplayComponents(text(`# ${title}`));
+  if (body) container.addSeparatorComponents(divider()).addTextDisplayComponents(text(body));
+  if (details) container.addSeparatorComponents(divider()).addTextDisplayComponents(text(details));
+  return container;
+}
 
+function panel(title, body, details = null, ephemeral = true, allowedMentions = ALLOWED_MENTIONS_NONE) {
   return {
-    flags: EPHEMERAL_V2,
-    components: [result],
+    flags: ephemeral ? EPHEMERAL_V2 : V2,
+    components: [makeContainer(title, body, details)],
+    allowedMentions,
+  };
+}
+
+function buttonPanel(title, body, buttons, ephemeral = true) {
+  const container = makeContainer(title, body)
+    .addActionRowComponents(new ActionRowBuilder().addComponents(...buttons));
+  return {
+    flags: ephemeral ? EPHEMERAL_V2 : V2,
+    components: [container],
     allowedMentions: ALLOWED_MENTIONS_NONE,
   };
 }
 
-function startPanel(title, customId, body) {
-  return buttonPanel(title, body, [
-    secondaryButton(customId, "Start"),
-  ]);
+function imagePanel(title, imageUrl, body, buttons = [], allowedMentions = ALLOWED_MENTIONS_NONE) {
+  const container = makeContainer(title)
+    .addMediaGalleryComponents(
+      new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(imageUrl))
+    );
+  if (body) container.addSeparatorComponents(divider()).addTextDisplayComponents(text(body));
+  if (buttons.length) container.addSeparatorComponents(divider()).addActionRowComponents(
+    new ActionRowBuilder().addComponents(...buttons)
+  );
+  return { flags: V2, components: [container], allowedMentions };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -482,27 +449,19 @@ function tosPrompt() {
   return buttonPanel(
     "Terms of Service",
     [
-      "**Before using Larpify**",
+      "## Terms of Service",
+      "By using this bot, you agree to our Terms of Service.",
       "",
-      "By using this bot, you agree not to send **NSFW** or **CSAM** content.",
-      "",
-      "Sending prohibited content may result in an immediate blacklist.",
+      "Sending **NSFW**, **CSAM**, **gore**, or any other prohibited content is strictly forbidden and may result in being **permanently blacklisted**.",
     ].join("\n"),
-    [
-      secondaryButton("tos:accept", "Accept"),
-      secondaryButton("tos:decline", "Decline"),
-    ]
+    [neutralButton("tos:accept", "Accept"), neutralButton("tos:decline", "Decline")]
   );
 }
 
 function accessDenied() {
   return buttonPanel(
     "Access Denied",
-    [
-      "You must be a member of the Larpify support server to use this bot.",
-      "",
-      `**Support Server:** ${SUPPORT_SERVER_INVITE}`,
-    ].join("\n"),
+    `You must be a member of the Larpify support server to use this bot.\n\n**Support Server:** ${SUPPORT_SERVER_INVITE}`,
     [linkButton("Join Server", SUPPORT_SERVER_INVITE)]
   );
 }
@@ -510,84 +469,53 @@ function accessDenied() {
 function premiumRequired() {
   return buttonPanel(
     "Premium Required",
-    [
-      "You don't have premium to use this command.",
-      "",
-      "**Boost Larpify Discord server to use this command.**",
-    ].join("\n"),
+    "You don't have premium to use this command.\n\n**Boost Larpify Discord server to use this command.**",
     [linkButton("Larpify Server", SUPPORT_SERVER_INVITE)]
   );
 }
 
 function supportRestricted() {
-  return ephemeralPanel(
-    "Restricted",
-    "Commands are disabled inside the support server, except `/female` in the designated channel."
-  );
+  return panel("Restricted", "Commands are disabled in the support server.");
 }
 
 /* -------------------------------------------------------------------------- */
-/* Realtime membership / premium                                              */
+/* Membership / premium                                                       */
 /* -------------------------------------------------------------------------- */
 
-async function getFreshSupportMember(userId) {
-  try {
-    const guild = await client.guilds
-      .fetch(SUPPORT_SERVER_ID)
-      .catch(() => null);
+async function getSupportGuild() {
+  return client.guilds.fetch(SUPPORT_SERVER_ID).catch(() => null);
+}
 
-    if (!guild) {
-      return null;
-    }
+async function getSupportMember(userId) {
+  const cached = supportMemberCache.get(userId);
+  if (cached && cached.expiresAt > Date.now()) return cached.member;
 
-    return await guild.members
-      .fetch({
-        user: userId,
-        force: true,
-      })
-      .catch(() => null);
-  } catch (error) {
-    console.error("Support member lookup failed:", error);
-    return null;
-  }
+  const guild = await getSupportGuild();
+  if (!guild) return null;
+
+  const member = await guild.members.fetch({ user: userId, force: true }).catch(() => null);
+  supportMemberCache.set(userId, {
+    member,
+    expiresAt: Date.now() + SUPPORT_CACHE_TTL_MS,
+  });
+  return member;
 }
 
 async function isSupportMember(userId) {
-  return Boolean(
-    await getFreshSupportMember(userId)
-  );
+  return Boolean(await getSupportMember(userId));
 }
 
 async function hasPremiumRole(userId) {
-  try {
-    if (!PREMIUM_ROLE_ID) {
-      return false;
-    }
-
-    const member = await getFreshSupportMember(userId);
-
-    if (!member) {
-      return false;
-    }
-
-    return Boolean(
-      member.roles?.cache?.has(PREMIUM_ROLE_ID)
-    );
-  } catch (error) {
-    console.error("Premium role check failed:", error);
-    return false;
-  }
+  const member = await getSupportMember(userId);
+  return Boolean(member?.roles?.cache?.has(PREMIUM_ROLE_ID));
 }
 
 function isSupportServer(interaction) {
   return interaction.guildId === SUPPORT_SERVER_ID;
 }
 
-function canUseFemaleInSupportServer(interaction) {
-  return (
-    isSupportServer(interaction) &&
-    interaction.channelId === SUPPORT_FEMALE_CHANNEL_ID
-  );
+function canUseFemale(interaction) {
+  return isSupportServer(interaction) && interaction.channelId === SUPPORT_FEMALE_CHANNEL_ID;
 }
 
 function isBlacklisted(userId) {
@@ -597,9 +525,7 @@ function isBlacklisted(userId) {
 function isAdministrator(interaction) {
   return Boolean(
     interaction.inGuild() &&
-      interaction.memberPermissions?.has(
-        PermissionsBitField.Flags.Administrator
-      )
+    interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)
   );
 }
 
@@ -608,384 +534,155 @@ function isAdministrator(interaction) {
 /* -------------------------------------------------------------------------- */
 
 function cleanLog(value, maxLength = 1500) {
-  const output = String(value ?? "None")
-    .replace(/```/g, "'''")
-    .trim();
-
-  return output.length <= maxLength
-    ? output
-    : `${output.slice(0, maxLength - 3)}...`;
+  const output = String(value ?? "None").replace(/```/g, "'''").trim();
+  return output.length <= maxLength ? output : `${output.slice(0, maxLength - 3)}...`;
 }
 
-function getCommandName(interaction) {
-  if (interaction.isChatInputCommand()) {
-    return `/${interaction.commandName}`;
-  }
-
-  if (interaction.isButton()) {
-    return `Button (${interaction.customId.split(":")[0]})`;
-  }
-
-  return "Unknown Action";
-}
-
-function getLocation(interaction) {
-  if (interaction.guildId) {
-    return {
-      type: "Server",
-      serverId: interaction.guildId,
-    };
-  }
-
-  return {
-    type: "DM",
-    serverId: "N/A",
-  };
-}
-
-function buildCommandLog(interaction, output) {
-  const location = getLocation(interaction);
-
-  const moderationRow = new ActionRowBuilder().addComponents(
-    secondaryButton(
-      `blacklist:${interaction.user.id}`,
-      "Blacklist"
-    ),
-    secondaryButton(
-      `unblacklist:${interaction.user.id}`,
-      "Unblacklist"
-    )
-  );
-
-  const result = new ContainerBuilder()
-    .clearAccentColor()
-    .addTextDisplayComponents(
-      text("# Log"),
-      text(
-        `**User:** ${interaction.user.username}\n` +
-          `**ID:** \`${interaction.user.id}\`\n` +
-          `**Command:** \`${getCommandName(interaction)}\``
-      )
-    )
-    .addSeparatorComponents(divider())
-    .addTextDisplayComponents(
-      text(
-        `**Channel:** \`${interaction.channelId ?? "Unknown"}\`\n` +
-          `**Location:** ${location.type}\n` +
-          `**Server ID:** \`${location.serverId}\``
-      )
-    )
-    .addSeparatorComponents(divider())
-    .addTextDisplayComponents(
-      text(
-        `**Output**\n\`\`\`\n${cleanLog(output)}\n\`\`\``
-      )
-    )
-    .addSeparatorComponents(divider())
-    .addTextDisplayComponents(
-      text("**Administrator Moderation**")
-    )
-    .addActionRowComponents(moderationRow);
-
-  return {
-    flags: V2,
-    components: [result],
-    allowedMentions: ALLOWED_MENTIONS_NONE,
-  };
+async function getChannel(id) {
+  const channel = await client.channels.fetch(id).catch(() => null);
+  return channel?.isTextBased?.() ? channel : null;
 }
 
 async function sendCommandLog(interaction, output) {
   try {
-    const channel = await client.channels
-      .fetch(LOG_CHANNEL_ID)
-      .catch(() => null);
-
-    if (!channel || !channel.isTextBased()) {
-      return;
-    }
-
-    await channel.send(
-      buildCommandLog(interaction, output)
+    const channel = await getChannel(LOG_CHANNEL_ID);
+    if (!channel) return;
+    const container = makeContainer(
+      "Log",
+      `**User:** ${interaction.user.username}\n**ID:** \`${interaction.user.id}\`\n**Command:** \`${interaction.isChatInputCommand() ? `/${interaction.commandName}` : `Button (${interaction.customId})`}\``,
+      `**Channel:** \`${interaction.channelId ?? "Unknown"}\`\n**Server:** \`${interaction.guildId ?? "DM"}\`\n\n**Output**\n\`\`\`\n${cleanLog(output)}\n\`\`\``
     );
+    container.addSeparatorComponents(divider()).addTextDisplayComponents(text("**Administrator Moderation**"));
+    container.addActionRowComponents(new ActionRowBuilder().addComponents(
+      neutralButton(`blacklist:${interaction.user.id}`, "Blacklist"),
+      neutralButton(`unblacklist:${interaction.user.id}`, "Unblacklist")
+    ));
+    await channel.send({ flags: V2, components: [container], allowedMentions: ALLOWED_MENTIONS_NONE });
   } catch (error) {
     console.error("Command log failed:", error);
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/* Link logging                                                               */
-/* -------------------------------------------------------------------------- */
-
 async function sendLinkLog(interaction, links) {
-  if (!Array.isArray(links) || links.length === 0) {
-    return;
-  }
-
+  if (!links.length) return;
   try {
-    const channel = await client.channels
-      .fetch(LINK_USED_CHANNEL_ID)
-      .catch(() => null);
-
-    if (!channel || !channel.isTextBased()) {
-      return;
-    }
-
-    const linksText = links
-      .map(
-        (link) =>
-          `- \`${cleanInline(link, 900)}\``
-      )
-      .join("\n");
-
-    const moderationRow = new ActionRowBuilder().addComponents(
-      secondaryButton(
-        `blacklist:${interaction.user.id}`,
-        "Blacklist"
-      ),
-      secondaryButton(
-        `unblacklist:${interaction.user.id}`,
-        "Unblacklist"
-      )
-    );
-
-    const result = new ContainerBuilder()
-      .clearAccentColor()
-      .addTextDisplayComponents(
-        text("# Link Used"),
-        text(
-          `**User:** ${interaction.user.username}\n` +
-            `**ID:** \`${interaction.user.id}\`\n` +
-            `**Command:** \`/${interaction.commandName}\``
-        )
-      )
-      .addSeparatorComponents(divider())
-      .addTextDisplayComponents(
-        text(
-          `**Links**\n${linksText}`
-        )
-      )
-      .addActionRowComponents(moderationRow);
-
-    await channel.send({
-      flags: V2,
-      components: [result],
-      allowedMentions: ALLOWED_MENTIONS_NONE,
-    });
+    const channel = await getChannel(LINK_USED_CHANNEL_ID);
+    if (!channel) return;
+    const body = links.map((link) => `- \`${cleanLog(link, 900)}\``).join("\n");
+    await channel.send(panel(
+      "Link Used",
+      `**User:** ${interaction.user.username}\n**ID:** \`${interaction.user.id}\`\n**Command:** \`/${interaction.commandName}\``,
+      `**Links**\n${body}`,
+      false
+    ));
   } catch (error) {
     console.error("Link log failed:", error);
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/* Auto moderation logging                                                   */
-/* -------------------------------------------------------------------------- */
-
-async function sendAutomodLog(
-  interaction,
-  matchedWord,
-  source,
-  persisted
-) {
+async function sendAutomodLog(interaction, matched, source, persisted) {
   try {
-    const channel = await client.channels
-      .fetch(BOT_AUTOMOD_CHANNEL_ID)
-      .catch(() => null);
-
-    if (!channel || !channel.isTextBased()) {
-      return;
-    }
-
-    const result = new ContainerBuilder()
-      .clearAccentColor()
-      .addTextDisplayComponents(
-        text("# Auto Moderation"),
-        text(
-          `**User:** ${interaction.user.username}\n` +
-            `**ID:** \`${interaction.user.id}\`\n` +
-            `**Command:** \`/${interaction.commandName}\``
-        )
-      )
-      .addSeparatorComponents(divider())
-      .addTextDisplayComponents(
-        text(
-          `**Matched:** \`${cleanInline(matchedWord, 200)}\`\n` +
-            `**Source:** \`${cleanInline(source, 100)}\`\n` +
-            "**Action:** User blacklisted"
-        )
-      )
-      .addSeparatorComponents(divider())
-      .addTextDisplayComponents(
-        text(
-          persisted
-            ? "Blacklist saved successfully."
-            : "Blacklist was applied in memory, but saving failed."
-        )
-      );
-
-    await channel.send({
-      flags: V2,
-      components: [result],
-      allowedMentions: ALLOWED_MENTIONS_NONE,
-    });
+    const channel = await getChannel(BOT_AUTOMOD_CHANNEL_ID);
+    if (!channel) return;
+    await channel.send(panel(
+      "Auto Moderation",
+      `**User:** ${interaction.user.username}\n**ID:** \`${interaction.user.id}\`\n**Source:** \`${cleanLog(source, 80)}\``,
+      `**Matched:** \`${cleanLog(matched, 200)}\`\n**Action:** User blacklisted\n**Persistence:** ${persisted ? "Saved" : "Memory only"}`,
+      false
+    ));
   } catch (error) {
-    console.error("Auto moderation log failed:", error);
+    console.error("Automod log failed:", error);
   }
 }
 
-async function autoBlacklistUser(
-  interaction,
-  matchedWord,
-  source
-) {
-  const userId = interaction.user.id;
-  const wasAlreadyBlacklisted = blacklistedUsers.has(userId);
-
-  blacklistedUsers.add(userId);
-  const persisted = saveBlacklist();
-
-  if (!persisted) {
-    console.error(
-      `Failed to persist auto blacklist for ${userId}.`
-    );
-  }
-
-  await sendAutomodLog(
-    interaction,
-    matchedWord,
-    source,
-    persisted
-  );
-
-  return {
-    newlyBlacklisted: !wasAlreadyBlacklisted,
-    persisted,
-  };
-}
-
 /* -------------------------------------------------------------------------- */
-/* User message moderation                                                   */
-/* -------------------------------------------------------------------------- */
-
-async function moderateUserMessage(
-  interaction,
-  content,
-  source
-) {
-  const badWord = findBadWord(content);
-
-  if (badWord) {
-    await autoBlacklistUser(
-      interaction,
-      badWord,
-      source
-    );
-
-    await safeReply(
-      interaction,
-      ephemeralPanel(
-        "Blocked",
-        "Your message was blocked.",
-        "Prohibited language was detected and your account has been blacklisted."
-      )
-    );
-
-    return {
-      blocked: true,
-      links: [],
-    };
-  }
-
-  const links = extractLinks(content);
-
-  if (links.length) {
-    await sendLinkLog(
-      interaction,
-      links
-    );
-  }
-
-  return {
-    blocked: false,
-    links,
-  };
-}
-
-/* -------------------------------------------------------------------------- */
-/* Safe interactions                                                          */
+/* Interaction helpers                                                        */
 /* -------------------------------------------------------------------------- */
 
 function isInteractionExpired(error) {
-  return (
-    error?.code === 10062 ||
-    error?.code === 40060 ||
-    error?.code === 10015
-  );
+  return error?.code === 10062 || error?.code === 40060 || error?.code === 10015;
 }
 
-async function safeReply(
-  interaction,
-  payload
-) {
+async function safeReply(interaction, payload) {
   try {
-    if (
-      interaction.replied ||
-      interaction.deferred
-    ) {
-      return await interaction.followUp(payload);
-    }
-
+    if (interaction.replied || interaction.deferred) return await interaction.followUp(payload);
     return await interaction.reply(payload);
   } catch (error) {
-    if (!isInteractionExpired(error)) {
-      console.error("Reply failed:", error);
-    }
-
+    if (!isInteractionExpired(error)) console.error("Reply failed:", error);
     return null;
   }
 }
 
-async function safeUpdate(
-  interaction,
-  payload
-) {
+async function safeUpdate(interaction, payload) {
   try {
-    if (
-      interaction.replied ||
-      interaction.deferred
-    ) {
-      return await interaction.editReply(payload);
-    }
-
+    if (interaction.replied || interaction.deferred) return await interaction.editReply(payload);
     return await interaction.update(payload);
   } catch (error) {
-    if (!isInteractionExpired(error)) {
-      console.error("Update failed:", error);
-    }
-
+    if (!isInteractionExpired(error)) console.error("Update failed:", error);
     return null;
   }
 }
 
-async function safeDeferUpdate(
-  interaction
-) {
+async function safeDeferUpdate(interaction) {
   try {
-    if (
-      interaction.replied ||
-      interaction.deferred
-    ) {
-      return true;
-    }
-
+    if (interaction.replied || interaction.deferred) return true;
     await interaction.deferUpdate();
     return true;
   } catch (error) {
-    if (!isInteractionExpired(error)) {
-      console.error("deferUpdate failed:", error);
-    }
-
+    if (!isInteractionExpired(error)) console.error("deferUpdate failed:", error);
     return false;
   }
+}
+
+async function safeDeferEphemeral(interaction) {
+  try {
+    if (interaction.replied || interaction.deferred) return true;
+    await interaction.deferReply({ flags: EPHEMERAL_V2 });
+    return true;
+  } catch (error) {
+    if (!isInteractionExpired(error)) console.error("deferReply failed:", error);
+    return false;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Moderation                                                                 */
+/* -------------------------------------------------------------------------- */
+
+async function autoBlacklistUser(interaction, matched, source) {
+  const id = interaction.user.id;
+  const wasBlacklisted = blacklistedUsers.has(id);
+  blacklistedUsers.add(id);
+
+  // Persist immediately, but keep logging off the critical response path.
+  const persisted = saveBlacklist();
+  void sendAutomodLog(interaction, matched, source, persisted);
+
+  return {
+    newlyBlacklisted: !wasBlacklisted,
+    persisted,
+    matched,
+  };
+}
+
+async function moderateText(interaction, content, source) {
+  const matched = findBadWord(content);
+  if (matched) {
+    await autoBlacklistUser(interaction, matched, source);
+    await safeReply(
+      interaction,
+      panel(
+        "Blocked",
+        "Your message was blocked.",
+        "Prohibited content was detected and your account has been blacklisted."
+      )
+    );
+    return { blocked: true, links: [] };
+  }
+
+  const links = extractLinks(content);
+  if (links.length) void sendLinkLog(interaction, links);
+  return { blocked: false, links };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -994,9 +691,7 @@ async function safeDeferUpdate(
 
 function commonCommand(command) {
   return command
-    .setIntegrationTypes(
-      ApplicationIntegrationType.UserInstall
-    )
+    .setIntegrationTypes(ApplicationIntegrationType.UserInstall)
     .setContexts(
       InteractionContextType.Guild,
       InteractionContextType.BotDM,
@@ -1006,177 +701,106 @@ function commonCommand(command) {
 }
 
 const commands = [
-  commonCommand(
-    new SlashCommandBuilder()
-      .setName("ping")
-      .setDescription("Check application response time")
-  ),
-
-  commonCommand(
-    new SlashCommandBuilder()
-      .setName("uptime")
-      .setDescription("Check process uptime")
-  ),
-
-  commonCommand(
-    new SlashCommandBuilder()
-      .setName("female")
-      .setDescription("Request a portrait")
-  ),
-
+  commonCommand(new SlashCommandBuilder().setName("ping").setDescription("Check application response time")),
+  commonCommand(new SlashCommandBuilder().setName("uptime").setDescription("Check process uptime")),
+  commonCommand(new SlashCommandBuilder().setName("profile").setDescription("View your Larpify profile")),
   commonCommand(
     new SlashCommandBuilder()
       .setName("lag")
-      .setDescription("Send 5 configured test messages")
-      .addIntegerOption((option) =>
-        option
-          .setName("type")
-          .setDescription("Select effect type")
-          .setRequired(true)
-          .addChoices(
-            { name: "Type 1", value: 1 },
-            { name: "Type 2", value: 2 },
-            { name: "Type 3", value: 3 },
-            { name: "Type 4", value: 4 }
-          )
+      .setDescription("Send 5 configured messages")
+      .addIntegerOption((option) => option
+        .setName("type")
+        .setDescription("Select message type")
+        .setRequired(true)
+        .addChoices(
+          { name: "Type 1", value: 1 },
+          { name: "Type 2", value: 2 },
+          { name: "Type 3", value: 3 },
+          { name: "Type 4", value: 4 }
+        )
       )
   ),
-
   commonCommand(
     new SlashCommandBuilder()
       .setName("say")
-      .setDescription("Send one message as the bot")
-      .addStringOption((option) =>
-        option
-          .setName("message")
-          .setDescription("Message to send")
-          .setRequired(true)
-          .setMaxLength(2000)
+      .setDescription("Send a message as Larpify")
+      .addStringOption((option) => option
+        .setName("message")
+        .setDescription("Message to send")
+        .setRequired(true)
+        .setMaxLength(2000)
       )
   ),
-
-  commonCommand(
-    new SlashCommandBuilder()
-      .setName("spam")
-      .setDescription("Send 5 configured test messages")
-  ),
-
+  commonCommand(new SlashCommandBuilder().setName("spam").setDescription("Send the Larpify message 5 times")),
   commonCommand(
     new SlashCommandBuilder()
       .setName("customspam")
-      .setDescription("Send 5 custom test messages")
-      .addStringOption((option) =>
-        option
-          .setName("message")
-          .setDescription("Message to send")
-          .setRequired(true)
-          .setMaxLength(2000)
+      .setDescription("Send a custom message 5 times")
+      .addStringOption((option) => option
+        .setName("message")
+        .setDescription("Message to send")
+        .setRequired(true)
+        .setMaxLength(2000)
       )
   ),
-
+  commonCommand(
+    new SlashCommandBuilder()
+      .setName("ghost-ping")
+      .setDescription("Open the Ghost Ping button")
+      .addUserOption((option) => option.setName("user").setDescription("Target user").setRequired(true))
+  ),
   commonCommand(
     new SlashCommandBuilder()
       .setName("blame")
-      .setDescription("Blame a user for spamming")
-      .addUserOption((option) =>
-        option
-          .setName("user")
-          .setDescription("Target user")
-          .setRequired(true)
-      )
+      .setDescription("Blame a user for /spam")
+      .addUserOption((option) => option.setName("user").setDescription("Target user").setRequired(true))
   ),
-
-  commonCommand(
-    new SlashCommandBuilder()
-      .setName("fake-nitro")
-      .setDescription("Open a Nitro gift preview")
-  ),
-
-  commonCommand(
-    new SlashCommandBuilder()
-      .setName("fake-ban")
-      .setDescription("Open a moderation preview")
-      .addUserOption((option) =>
-        option
-          .setName("user")
-          .setDescription("Target user")
-          .setRequired(true)
-      )
-  ),
-
+  commonCommand(new SlashCommandBuilder().setName("fake-nitro").setDescription("Open a Nitro gift preview")),
   commonCommand(
     new SlashCommandBuilder()
       .setName("fake-token")
-      .setDescription("Encode a user ID")
-      .addUserOption((option) =>
-        option
-          .setName("user")
-          .setDescription("Target user")
-          .setRequired(true)
-      )
+      .setDescription("Generate a random fake token")
+      .addUserOption((option) => option.setName("user").setDescription("Target user").setRequired(true))
   ),
-
   commonCommand(
     new SlashCommandBuilder()
       .setName("fake-ip")
-      .setDescription("Show sample IP information")
-      .addUserOption((option) =>
-        option
-          .setName("user")
-          .setDescription("Target user")
-          .setRequired(true)
-      )
+      .setDescription("Generate random fake IP information")
+      .addUserOption((option) => option.setName("user").setDescription("Target user").setRequired(true))
   ),
 ];
 
+const FEMALE_COMMAND = new SlashCommandBuilder()
+  .setName("female")
+  .setDescription("Request a portrait")
+  .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+  .setContexts(InteractionContextType.Guild)
+  .toJSON();
+
 async function registerCommands() {
-  console.log("Registering application commands...");
-
-  await rest.put(
-    Routes.applicationCommands(CLIENT_ID),
-    { body: commands }
-  );
-
-  console.log("Application commands registered.");
+  await Promise.all([
+    rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands }),
+    rest.put(Routes.applicationGuildCommands(CLIENT_ID, SUPPORT_SERVER_ID), { body: [FEMALE_COMMAND] }),
+  ]);
 }
 
 /* -------------------------------------------------------------------------- */
 /* Pexels                                                                     */
 /* -------------------------------------------------------------------------- */
 
-const femaleQueries = [
-  "young adult woman portrait",
+const FEMALE_QUERIES = [
+  "adult woman portrait",
   "woman portrait",
   "fashion woman portrait",
-  "adult woman portrait",
+  "adult woman fashion",
   "stylish woman portrait",
 ];
 
-const fallbackFemalePhotos = [
-  {
-    src: {
-      large:
-        "https://images.pexels.com/photos/415829/pexels-photo-415829.jpeg?auto=compress&cs=tinysrgb&h=650&w=940",
-    },
-  },
-  {
-    src: {
-      large:
-        "https://images.pexels.com/photos/774909/pexels-photo-774909.jpeg?auto=compress&cs=tinysrgb&h=650&w=940",
-    },
-  },
-  {
-    src: {
-      large:
-        "https://images.pexels.com/photos/1239291/pexels-photo-1239291.jpeg?auto=compress&cs=tinysrgb&h=650&w=940",
-    },
-  },
-  {
-    src: {
-      large:
-        "https://images.pexels.com/photos/733872/pexels-photo-733872.jpeg?auto=compress&cs=tinysrgb&h=650&w=940",
-    },
-  },
+const FALLBACK_FEMALE_PHOTOS = [
+  "https://images.pexels.com/photos/415829/pexels-photo-415829.jpeg?auto=compress&cs=tinysrgb&h=650&w=940",
+  "https://images.pexels.com/photos/774909/pexels-photo-774909.jpeg?auto=compress&cs=tinysrgb&h=650&w=940",
+  "https://images.pexels.com/photos/1239291/pexels-photo-1239291.jpeg?auto=compress&cs=tinysrgb&h=650&w=940",
+  "https://images.pexels.com/photos/733872/pexels-photo-733872.jpeg?auto=compress&cs=tinysrgb&h=650&w=940",
 ];
 
 async function searchPexels(query) {
@@ -1190,37 +814,18 @@ async function searchPexels(query) {
   });
 
   const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(),
-    8000
-  );
+  const timeout = setTimeout(() => controller.abort(), 7000);
 
   try {
-    const response = await fetch(
-      `https://api.pexels.com/v1/search?${params.toString()}`,
-      {
-        method: "GET",
-        headers: {
-          Authorization: PEXELS_API_KEY,
-          Accept: "application/json",
-        },
-        signal: controller.signal,
-      }
-    );
-
-    if (!response.ok) {
-      return [];
-    }
-
+    const response = await fetch(`https://api.pexels.com/v1/search?${params}`, {
+      headers: { Authorization: PEXELS_API_KEY, Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (!response.ok) return [];
     const data = await response.json();
-    return Array.isArray(data?.photos)
-      ? data.photos
-      : [];
+    return Array.isArray(data?.photos) ? data.photos : [];
   } catch (error) {
-    if (error?.name !== "AbortError") {
-      console.error("Pexels request failed:", error);
-    }
-
+    if (error?.name !== "AbortError") console.error("Pexels request failed:", error);
     return [];
   } finally {
     clearTimeout(timeout);
@@ -1228,1303 +833,708 @@ async function searchPexels(query) {
 }
 
 async function getFemalePhoto() {
-  const queries = [...femaleQueries].sort(
-    () => Math.random() - 0.5
-  );
-
-  for (const query of queries) {
+  const shuffled = [...FEMALE_QUERIES].sort(() => Math.random() - 0.5);
+  for (const query of shuffled) {
     const photos = await searchPexels(query);
-
-    const valid = photos.filter(
-      (photo) =>
-        photo?.src?.large ||
-        photo?.src?.large2x ||
-        photo?.src?.portrait ||
-        photo?.src?.original
-    );
-
-    if (valid.length) {
-      return valid[
-        Math.floor(
-          Math.random() * valid.length
-        )
-      ];
+    const usable = photos.filter((photo) => photo?.src?.large || photo?.src?.portrait || photo?.src?.original);
+    if (usable.length) {
+      const photo = usable[Math.floor(Math.random() * usable.length)];
+      return photo?.src?.large || photo?.src?.portrait || photo?.src?.original;
     }
   }
-
-  return fallbackFemalePhotos[
-    Math.floor(
-      Math.random() * fallbackFemalePhotos.length
-    )
-  ];
+  return FALLBACK_FEMALE_PHOTOS[Math.floor(Math.random() * FALLBACK_FEMALE_PHOTOS.length)];
 }
 
-function femalePublicMessage(photo) {
-  const image =
-    photo?.src?.large ||
-    photo?.src?.large2x ||
-    photo?.src?.portrait ||
-    photo?.src?.original;
+/* -------------------------------------------------------------------------- */
+/* UI builders                                                                */
+/* -------------------------------------------------------------------------- */
 
-  if (!image) {
-    throw new Error(
-      "No usable portrait URL was returned."
-    );
-  }
-
-  const gallery = new MediaGalleryBuilder().addItems(
-    new MediaGalleryItemBuilder().setURL(image)
+function uptimePanel() {
+  return panel(
+    "Uptime",
+    `**Uptime:** ${formatUptime(process.uptime())}`,
+    `**Started:** ${formatDiscordTimestamp(PROCESS_STARTED_AT_MS)}\n**Relative:** ${formatDiscordRelative(PROCESS_STARTED_AT_MS)}`
   );
+}
 
-  const result = new ContainerBuilder()
-    .clearAccentColor()
+async function profilePanel(user) {
+  const profile = getProfile(user.id, user.username);
+  const [mostUsed, mostCount] = mostUsedCommand(profile);
+  const avatar = user.displayAvatarURL({ extension: "png", size: 256 });
+  const lastActive = profile.lastActiveAt
+    ? `${formatDiscordTimestamp(profile.lastActiveAt)} • ${formatDiscordRelative(profile.lastActiveAt)}`
+    : "Not Available";
+
+  const section = new SectionBuilder()
     .addTextDisplayComponents(
-      text("# Portrait Result")
+      text(`**User**\n\`${cleanLog(user.username, 80)}\``),
+      text(`**Commands**\n\`${Number(profile.commands || 0)}\``),
+      text(`**Most Used**\n\`/${mostUsed} (${mostCount})\``)
     )
-    .addSeparatorComponents(divider())
-    .addMediaGalleryComponents(gallery)
+    .setThumbnailAccessory(new ThumbnailBuilder().setURL(avatar));
+
+  const container = makeContainer("Profile")
+    .addSectionComponents(section)
     .addSeparatorComponents(divider())
     .addTextDisplayComponents(
-      text("Report if NSFW in tickets.")
+      text(`**Premium**\n\`${(await hasPremiumRole(user.id)) ? "Yes" : "No"}\`\n\n**Blacklisted**\n\`${isBlacklisted(user.id) ? "Yes" : "No"}\``),
+      text(`**TOS Accepted**\n\`${tosData[user.id] ? "Yes" : "No"}\`\n\n**Last Active**\n${lastActive}`)
     );
 
+  return { flags: EPHEMERAL_V2, components: [container], allowedMentions: ALLOWED_MENTIONS_NONE };
+}
+
+function ghostPingPanel(target) {
+  const container = makeContainer(
+    "Ghost Ping",
+    `**Target:** <@${target.id}>`
+  ).addActionRowComponents(
+    new ActionRowBuilder().addComponents(
+      neutralButton(`ghost_ping:${target.id}`, "Ghost Ping")
+    )
+  );
   return {
-    flags: V2,
-    components: [result],
-    allowedMentions: ALLOWED_MENTIONS_NONE,
+    flags: EPHEMERAL_V2,
+    components: [container],
+    allowedMentions: ALLOWED_MENTIONS_ALL,
   };
 }
 
-/* -------------------------------------------------------------------------- */
-/* Presence                                                                   */
-/* -------------------------------------------------------------------------- */
-
-const PRESENCE_MESSAGES = [
-  "Over Your Conversation",
-  "YouTube",
-];
-
-let presenceIndex = 0;
-let presenceInterval = null;
-
-function updatePresence() {
-  if (!client.user) {
-    return;
-  }
-
-  try {
-    client.user.setPresence({
-      status: "dnd",
-      activities: [
-        {
-          name:
-            PRESENCE_MESSAGES[presenceIndex],
-          type: ActivityType.Watching,
-        },
-      ],
-    });
-
-    presenceIndex =
-      (presenceIndex + 1) %
-      PRESENCE_MESSAGES.length;
-  } catch (error) {
-    console.error(
-      "Presence update failed:",
-      error
-    );
-  }
+function spamPanel(kind, customId, body) {
+  return buttonPanel(kind, body, [neutralButton(customId, "Start")]);
 }
 
-function startPresenceRotation() {
-  updatePresence();
-
-  if (presenceInterval) {
-    clearInterval(presenceInterval);
-  }
-
-  presenceInterval = setInterval(
-    updatePresence,
-    5000
-  );
-
-  presenceInterval.unref?.();
-}
-
-/* -------------------------------------------------------------------------- */
-/* Batch sending                                                              */
-/* -------------------------------------------------------------------------- */
-
-async function sendFiveMessages(
-  interaction,
-  content
-) {
-  const message = String(content ?? "")
-    .trim()
-    .slice(0, 2000);
-
-  if (!message) {
-    return {
-      successes: 0,
-      failures: 5,
-    };
-  }
-
-  const results = await Promise.allSettled(
-    Array.from(
-      { length: 5 },
-      () =>
-        interaction.followUp({
-          content: message,
-          allowedMentions:
-            ALLOWED_MENTIONS_ALL,
-        })
-    )
-  );
-
-  const successes = results.filter(
-    (result) =>
-      result.status === "fulfilled"
-  ).length;
-
-  return {
-    successes,
-    failures: 5 - successes,
-  };
-}
-
-/* -------------------------------------------------------------------------- */
-/* Command handler                                                            */
-/* -------------------------------------------------------------------------- */
-
-async function handleCommand(
-  interaction
-) {
-  if (
-    !(await isSupportMember(
-      interaction.user.id
+function nitroPanel(user) {
+  const container = makeContainer("Nitro")
+    .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(
+      new MediaGalleryItemBuilder().setURL(NITRO_IMAGE_URL)
     ))
-  ) {
-    await safeReply(
-      interaction,
-      accessDenied()
-    );
-
-    return;
-  }
-
-  if (isSupportServer(interaction)) {
-    if (
-      interaction.commandName !== "female" ||
-      !canUseFemaleInSupportServer(interaction)
-    ) {
-      await safeReply(
-        interaction,
-        supportRestricted()
-      );
-
-      return;
-    }
-  }
-
-  if (
-    isBlacklisted(
-      interaction.user.id
+    .addSeparatorComponents(divider())
+    .addTextDisplayComponents(
+      text("## You've been gifted a subscription!"),
+      text(`**${BOT_NAME}** has gifted you Nitro for **3 months**.`),
+      text("Expires in 48 hours.")
     )
-  ) {
-    await safeReply(
-      interaction,
-      ephemeralPanel(
-        "Blocked",
-        "You are blacklisted from using this bot."
+    .addSeparatorComponents(divider())
+    .addActionRowComponents(
+      new ActionRowBuilder().addComponents(
+        neutralButton(`fake_nitro_accept:${user.id}`, "Accept Gift"),
+        linkButton("Learn More", SUPPORT_SERVER_INVITE)
       )
     );
 
-    return;
+  return { flags: V2, components: [container], allowedMentions: ALLOWED_MENTIONS_ALL };
+}
+
+function acceptedNitroPanel() {
+  const container = makeContainer(
+    "Nitro",
+    "## Gift Accepted",
+    `The gift action is complete.\n\n**${BOT_NAME}** sent the requested message batch.`
+  ).addActionRowComponents(
+    new ActionRowBuilder().addComponents(
+      neutralButton("fake_nitro_accepted", "Accepted", true),
+      linkButton("Learn More", SUPPORT_SERVER_INVITE)
+    )
+  );
+  return { flags: V2, components: [container], allowedMentions: ALLOWED_MENTIONS_NONE };
+}
+
+const FAKE_IP_PROFILES = [
+  { label: "North America", ipv4: [23, 91], ipv6: "2606:4700" },
+  { label: "Europe", ipv4: [31, 51], ipv6: "2a00:1450" },
+  { label: "United Kingdom", ipv4: [81, 92], ipv6: "2a02:6b8" },
+  { label: "Asia Pacific", ipv4: [103, 104], ipv6: "2404:6800" },
+  { label: "Oceania", ipv4: [139, 144], ipv6: "2001:8003" },
+  { label: "South America", ipv4: [177, 181], ipv6: "2804:14" },
+];
+
+function fakeIpForUser(userId) {
+  const previous = fakeIpHistory.get(userId);
+  let profile;
+  do {
+    profile = FAKE_IP_PROFILES[Math.floor(Math.random() * FAKE_IP_PROFILES.length)];
+  } while (previous && previous.profile === profile.label && FAKE_IP_PROFILES.length > 1);
+
+  const data = {
+    profile: profile.label,
+    ipv4: `${profile.ipv4[0]}.${profile.ipv4[1]}.${randomInt(1, 254)}.${randomInt(1, 254)}`,
+    ipv6: `${profile.ipv6}:${randomHex(4)}:${randomHex(4)}:${randomHex(4)}:${randomHex(4)}:${randomHex(4)}:${randomHex(4)}`,
+    protocol: Math.random() > 0.5 ? "TCP" : "UDP",
+  };
+  fakeIpHistory.set(userId, data);
+  return data;
+}
+
+function fakeIpPanel(target) {
+  const ip = fakeIpForUser(target.id);
+  const container = makeContainer(
+    "IP Information",
+    `**Target:** <@${target.id}>`,
+    `**IPv4:** \`${ip.ipv4}\`\n**IPv6:** \`${ip.ipv6}\`\n**Region:** ${ip.profile}\n**Protocol:** ${ip.protocol}`
+  );
+  return { flags: V2, components: [container], allowedMentions: ALLOWED_MENTIONS_ALL };
+}
+
+function fakeTokenPanel(target) {
+  const raw = crypto.randomBytes(28).toString("base64url");
+  const token = `${raw.slice(0, 24)}.${raw.slice(24, 30)}.${crypto.randomBytes(24).toString("base64url")}`;
+  const container = makeContainer(
+    "Fake Token",
+    `**Target:** <@${target.id}>`,
+    `**Token**\n\`${token}\``
+  );
+  return { flags: V2, components: [container], allowedMentions: ALLOWED_MENTIONS_ALL };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Sending                                                                    */
+/* -------------------------------------------------------------------------- */
+
+async function sendFiveMessages(interaction, content) {
+  const message = String(content ?? "").trim().slice(0, 2000);
+  if (!message) return { sent: 0, failed: BATCH_SIZE };
+
+  const jobs = Array.from({ length: BATCH_SIZE }, () => interaction.followUp({
+    content: message,
+    allowedMentions: ALLOWED_MENTIONS_ALL,
+  }));
+
+  const results = await Promise.allSettled(jobs);
+  return {
+    sent: results.filter((result) => result.status === "fulfilled").length,
+    failed: results.filter((result) => result.status === "rejected").length,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Interaction routing                                                        */
+/* -------------------------------------------------------------------------- */
+
+async function ensureCommandAccess(interaction) {
+  if (!(await isSupportMember(interaction.user.id))) {
+    await safeReply(interaction, accessDenied());
+    return false;
   }
 
+  if (isSupportServer(interaction)) {
+    const allowed = interaction.commandName === "female";
+    if (!allowed) {
+      await safeReply(interaction, supportRestricted());
+      return false;
+    }
+  }
+
+  if (isBlacklisted(interaction.user.id)) {
+    await safeReply(interaction, panel("Blocked", "You are permanently blacklisted from using this bot."));
+    return false;
+  }
+
+  return true;
+}
+
+async function handleCommand(interaction) {
+  if (!(await ensureCommandAccess(interaction))) return;
+  recordCommandActivity(interaction);
+
   switch (interaction.commandName) {
+    case "profile": {
+      await safeReply(interaction, await profilePanel(interaction.user));
+      return;
+    }
+
     case "ping": {
-      const latency = Math.max(
-        0,
-        Math.round(client.ws.ping)
-      );
-
-      await safeReply(
-        interaction,
-        ephemeralPanel(
-          "Ping",
-          `**${latency}ms**`
-        )
-      );
-
-      await sendCommandLog(
-        interaction,
-        `Ping: ${latency}ms`
-      );
-
+      const started = process.hrtime.bigint();
+      await safeReply(interaction, panel("Pong!", "Measuring response time..."));
+      const ms = Math.max(0, Math.round(Number(process.hrtime.bigint() - started) / 1e6));
+      await safeUpdate(interaction, panel(
+        "Pong!",
+        `**Roundtrip:** ${ms}ms`,
+        `**WebSocket:** ${Math.max(0, Math.round(client.ws.ping))}ms`
+      ));
+      void sendCommandLog(interaction, `Roundtrip ${ms}ms | WebSocket ${client.ws.ping}ms`);
       return;
     }
 
     case "uptime": {
-      const uptime = formatUptime(
-        process.uptime()
-      );
-
-      await safeReply(
-        interaction,
-        ephemeralPanel(
-          "Uptime",
-          `**${uptime}**`
-        )
-      );
-
-      await sendCommandLog(
-        interaction,
-        `Uptime: ${uptime}`
-      );
-
+      await safeReply(interaction, uptimePanel());
+      void sendCommandLog(interaction, `Uptime: ${formatUptime(process.uptime())}`);
       return;
     }
 
     case "female": {
-      await safeReply(
-        interaction,
-        ephemeralPanel(
-          "Fetching",
-          "**Fetching a female image...**"
-        )
-      );
-
-      try {
-        const photo = await getFemalePhoto();
-
-        await interaction.followUp(
-          femalePublicMessage(photo)
-        );
-
-        await sendCommandLog(
-          interaction,
-          "Female portrait request completed."
-        );
-      } catch (error) {
-        console.error(
-          "Female command failed:",
-          error
-        );
-
-        await interaction.followUp(
-          publicPanel(
-            "Error",
-            "Unable to fetch the image right now."
-          )
-        );
+      if (!canUseFemale(interaction)) {
+        await safeReply(interaction, supportRestricted());
+        return;
       }
-
+      await safeReply(interaction, panel("Female", "Fetching a portrait..."));
+      try {
+        const imageUrl = await getFemalePhoto();
+        await interaction.followUp({
+          flags: V2,
+          components: [
+            makeContainer("Portrait Result")
+              .addMediaGalleryComponents(new MediaGalleryBuilder().addItems(
+                new MediaGalleryItemBuilder().setURL(imageUrl)
+              ))
+          ],
+          allowedMentions: ALLOWED_MENTIONS_NONE,
+        });
+      } catch (error) {
+        console.error("Female command failed:", error);
+        await interaction.followUp(panel("Error", "Unable to fetch the image right now."));
+      }
       return;
     }
 
     case "say": {
-      const content =
-        interaction.options.getString(
-          "message",
-          true
-        );
+      const content = interaction.options.getString("message", true);
+      const moderation = await moderateText(interaction, content, "say");
+      if (moderation.blocked) return;
 
-      const moderation =
-        await moderateUserMessage(
-          interaction,
-          content,
-          "say"
-        );
-
-      if (moderation.blocked) {
-        return;
-      }
-
-      await safeReply(
-        interaction,
-        ephemeralPanel(
-          "Sending",
-          "**Sending 1 message as the bot.**"
-        )
-      );
-
-      await interaction.followUp(
-        publicPanel(
-          "Message",
-          content,
-          null,
-          ALLOWED_MENTIONS_ALL
-        )
-      );
-
-      await sendCommandLog(
-        interaction,
-        content
-      );
-
+      await safeReply(interaction, panel("Say", "Sending message 1 time(s)..."));
+      await interaction.followUp({ content, allowedMentions: ALLOWED_MENTIONS_ALL });
+      void sendCommandLog(interaction, content);
       return;
     }
 
     case "lag": {
-      if (
-        !(await hasPremiumRole(
-          interaction.user.id
-        ))
-      ) {
-        await safeReply(
-          interaction,
-          premiumRequired()
-        );
-
-        return;
-      }
-
-      const type =
-        interaction.options.getInteger(
-          "type",
-          true
-        );
-
-      const message =
-        LAG_MESSAGES[type];
-
+      const type = interaction.options.getInteger("type", true);
+      const message = LAG_MESSAGES[type];
       if (!message) {
-        await safeReply(
-          interaction,
-          ephemeralPanel(
-            "Configuration Error",
-            `**LAG_TYPE_${type}** is not configured.`
-          )
-        );
-
+        await safeReply(interaction, panel("Configuration Error", `**LAG_TYPE_${type}** is not configured.`));
         return;
       }
-
-      await safeReply(
-        interaction,
-        startPanel(
-          "Lag Test",
-          `start_lag:${type}:${interaction.user.id}`,
-          [
-            "**Premium feature**",
-            "",
-            "Press **Start** to run 5 controlled test messages.",
-          ].join("\n")
-        )
-      );
-
+      if (!(await hasPremiumRole(interaction.user.id))) {
+        await safeReply(interaction, premiumRequired());
+        return;
+      }
+      await safeReply(interaction, spamPanel(
+        "Premium Feature",
+        `batch_lag:${type}:${interaction.user.id}`,
+        "Press **Start** to send 5 messages."
+      ));
       return;
     }
 
     case "spam": {
-      await safeReply(
-        interaction,
-        startPanel(
-          "Spam Test",
-          `start_spam:${interaction.user.id}`,
-          [
-            "Press **Start** to run 5 test messages.",
-            "",
-            "Uses the Larpify template.",
-          ].join("\n")
-        )
-      );
-
+      await safeReply(interaction, spamPanel(
+        "Spam",
+        `batch_spam:${interaction.user.id}`,
+        "Press **Start** to send 5 messages."
+      ));
       return;
     }
 
     case "customspam": {
-      const content =
-        interaction.options.getString(
-          "message",
-          true
-        );
+      const content = interaction.options.getString("message", true);
+      const moderation = await moderateText(interaction, content, "customspam");
+      if (moderation.blocked) return;
+      const sessionId = createCustomSession(interaction.user.id, content);
+      await safeReply(interaction, spamPanel(
+        "Custom Spam",
+        `batch_custom:${sessionId}`,
+        "Press **Start** to send 5 messages."
+      ));
+      return;
+    }
 
-      const moderation =
-        await moderateUserMessage(
-          interaction,
-          content,
-          "customspam"
-        );
-
-      if (moderation.blocked) {
-        return;
-      }
-
-      const sessionId =
-        createCustomSession(
-          interaction.user.id,
-          content
-        );
-
-      await safeReply(
-        interaction,
-        startPanel(
-          "Custom Test",
-          `start_custom:${sessionId}`,
-          [
-            "Press **Start** to run 5 messages.",
-            "",
-            "Your custom message will be used.",
-          ].join("\n")
-        )
-      );
-
-      await sendCommandLog(
-        interaction,
-        content
-      );
-
+    case "ghost-ping": {
+      const target = interaction.options.getUser("user", true);
+      await safeReply(interaction, ghostPingPanel(target));
       return;
     }
 
     case "blame": {
-      const target =
-        interaction.options.getUser(
-          "user",
-          true
-        );
+      const target = interaction.options.getUser("user", true);
+      await safeReply(interaction, panel(
+        "Blame",
+        `Blaming **<@${target.id}>** for /spam...`,
+        null,
+        true,
+        ALLOWED_MENTIONS_ALL
+      ));
 
-      await safeReply(
-        interaction,
-        ephemeralPanel(
-          "Blaming User",
-          "**Blaming a user for /spam.**",
-          `Target: <@${target.id}>`,
-          ALLOWED_MENTIONS_ALL
-        )
-      );
-
-      await interaction.followUp(
-        publicPanel(
-          "Completed",
-          `<@${target.id}> **thanks for using Larpify.**`,
-          "Your **/spam** operation has been completed.",
-          ALLOWED_MENTIONS_ALL
-        )
-      );
-
-      await sendCommandLog(
-        interaction,
-        `Blame operation completed for ${target.id}.`
-      );
-
+      await interaction.followUp(panel(
+        "Thank You!",
+        `Thank you **<@${target.id}>** for using **${BOT_NAME}**!`,
+        `Your **/spam** operation has finished.`,
+        false,
+        ALLOWED_MENTIONS_ALL
+      ));
+      void sendCommandLog(interaction, `Blame operation completed for ${target.id}.`);
       return;
     }
 
     case "fake-nitro": {
-      const target = interaction.user;
-
-      await safeReply(
-        interaction,
-        ephemeralPanel(
-          "Sending",
-          "**Preparing your Nitro gift preview...**"
-        )
-      );
-
-      await interaction.followUp(
-        imagePanel(
-          "Larpify Gift",
-          NITRO_IMAGE_URL,
-          [
-            "**Larpify has gifted you 3 months of Nitro.**",
-            "",
-            `Recipient: <@${target.id}>`,
-            "",
-            "Use the buttons below for support information.",
-          ].join("\n"),
-          [
-            linkButton(
-              "Accept Gift",
-              SUPPORT_SERVER_INVITE
-            ),
-            linkButton(
-              "More Info",
-              SUPPORT_SERVER_INVITE
-            ),
-          ],
-          ALLOWED_MENTIONS_ALL
-        )
-      );
-
-      return;
-    }
-
-    case "fake-ban": {
-      const target =
-        interaction.options.getUser(
-          "user",
-          true
-        );
-
-      await safeReply(
-        interaction,
-        ephemeralPanel(
-          "Processing",
-          "**Preparing the moderation preview...**"
-        )
-      );
-
-      await interaction.followUp(
-        imagePanel(
-          "Moderation Notice",
-          BANNED_IMAGE_URL,
-          [
-            `User: <@${target.id}>`,
-            "",
-            "**Status:** Temporarily Restricted",
-            "**Reason:** Spam activity",
-            "**Duration:** 28 days",
-            "",
-            "Contact Larpify support for more information.",
-          ].join("\n"),
-          [
-            linkButton(
-              "Support",
-              SUPPORT_SERVER_INVITE
-            ),
-          ],
-          ALLOWED_MENTIONS_ALL
-        )
-      );
-
+      await safeReply(interaction, panel("Fake Nitro", "Sending fake Nitro gift..."));
+      await interaction.followUp(nitroPanel(interaction.user));
+      void sendCommandLog(interaction, `Fake Nitro shown to ${interaction.user.id}.`);
       return;
     }
 
     case "fake-token": {
-      const target =
-        interaction.options.getUser(
-          "user",
-          true
-        );
-
-      await safeReply(
-        interaction,
-        ephemeralPanel(
-          "Encoding",
-          "**Encoding the user ID...**"
-        )
-      );
-
-      const encoded =
-        Buffer
-          .from(target.id, "utf8")
-          .toString("base64")
-          .replace(/=+$/g, "");
-
-      await interaction.followUp(
-        publicPanel(
-          `Encoded ID of <@${target.id}>`,
-          `\`\`\`\n${encoded}\n\`\`\``,
-          null,
-          ALLOWED_MENTIONS_ALL
-        )
-      );
-
+      const target = interaction.options.getUser("user", true);
+      await safeReply(interaction, panel("Fake Token", "Generating fake token..."));
+      await interaction.followUp(fakeTokenPanel(target));
+      void sendCommandLog(interaction, `Fake token generated for ${target.id}.`);
       return;
     }
 
     case "fake-ip": {
-      const target =
-        interaction.options.getUser(
-          "user",
-          true
-        );
-
-      const hash =
-        crypto
-          .createHash("sha256")
-          .update(target.id)
-          .digest("hex");
-
-      const ipv4 =
-        `192.0.2.${
-          (parseInt(hash.slice(0, 2), 16) % 253) + 1
-        }`;
-
-      const ipv6 =
-        `2001:db8:${hash.slice(2, 6)}:${hash.slice(6, 10)}::${
-          (parseInt(hash.slice(10, 14), 16) & 0xffff).toString(16)
-        }`;
-
-      await safeReply(
-        interaction,
-        ephemeralPanel(
-          "Sending",
-          "**Preparing the IP information panel...**"
-        )
-      );
-
-      await interaction.followUp(
-        publicPanel(
-          `IP Information — <@${target.id}>`,
-          [
-            `**IPv4:** \`${ipv4}\``,
-            `**IPv6:** \`${ipv6}\``,
-            "",
-            "**Protocol:** UDP / IPv4",
-          ].join("\n"),
-          null,
-          ALLOWED_MENTIONS_ALL
-        )
-      );
-
+      const target = interaction.options.getUser("user", true);
+      await safeReply(interaction, panel("Fake IP", "Generating fake IP..."));
+      await interaction.followUp(fakeIpPanel(target));
+      void sendCommandLog(interaction, `Fake IP generated for ${target.id}.`);
       return;
     }
 
     default:
-      await safeReply(
-        interaction,
-        ephemeralPanel(
-          "Unavailable",
-          "Command not configured."
-        )
-      );
+      await safeReply(interaction, panel("Unavailable", "Command not configured."));
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/* Moderation buttons                                                         */
-/* -------------------------------------------------------------------------- */
-
-async function handleModerationButton(
-  interaction
-) {
-  const [action, targetUserId] =
-    interaction.customId.split(":");
-
-  if (
-    action !== "blacklist" &&
-    action !== "unblacklist"
-  ) {
-    return;
-  }
-
+async function handleModerationButton(interaction) {
   if (!isAdministrator(interaction)) {
-    await safeReply(
-      interaction,
-      ephemeralPanel(
-        "Restricted",
-        "**Administrator permission required.**"
-      )
-    );
+    await safeReply(interaction, panel("Restricted", "Administrator permission required."));
     return;
   }
 
-  const normalizedTarget = normalizeId(targetUserId);
-
-  if (!normalizedTarget) {
-    await safeReply(
-      interaction,
-      ephemeralPanel(
-        "Error",
-        "Invalid target user ID."
-      )
-    );
+  const [action, id] = interaction.customId.split(":");
+  const targetId = normalizeId(id);
+  if (!targetId) {
+    await safeReply(interaction, panel("Error", "Invalid target user ID."));
     return;
   }
 
-  if (action === "blacklist") {
-    blacklistedUsers.add(normalizedTarget);
+  if (action === "blacklist") blacklistedUsers.add(targetId);
+  else if (action === "unblacklist") blacklistedUsers.delete(targetId);
+  else return;
 
-    if (!saveBlacklist()) {
-      await safeReply(
-        interaction,
-        ephemeralPanel(
-          "Error",
-          "Failed to save the blacklist."
-        )
-      );
-      return;
-    }
-
-    await safeReply(
-      interaction,
-      ephemeralPanel(
-        "Blacklist Updated",
-        `User \`${normalizedTarget}\` has been blacklisted.`
-      )
-    );
-    return;
-  }
-
-  blacklistedUsers.delete(normalizedTarget);
-
-  if (!saveBlacklist()) {
-    await safeReply(
-      interaction,
-      ephemeralPanel(
-        "Error",
-        "Failed to save the blacklist."
-      )
-    );
-    return;
-  }
-
+  const saved = saveBlacklist();
   await safeReply(
     interaction,
-    ephemeralPanel(
+    panel(
       "Blacklist Updated",
-      `User \`${normalizedTarget}\` has been unblacklisted.`
+      `User \`${targetId}\` has been ${action === "blacklist" ? "blacklisted" : "unblacklisted"}.`,
+      saved ? "Saved successfully." : "Updated in memory; disk save failed."
     )
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Action buttons                                                             */
-/* -------------------------------------------------------------------------- */
-
-async function handleActionButton(
-  interaction
-) {
+async function handleActionButton(interaction) {
   const customId = interaction.customId;
 
   if (customId === "tos:accept") {
-    if (
-      !(await isSupportMember(
-        interaction.user.id
-      ))
-    ) {
-      await safeUpdate(
-        interaction,
-        accessDenied()
-      );
+    if (!(await isSupportMember(interaction.user.id))) {
+      await safeUpdate(interaction, accessDenied());
       return;
     }
-
     tosData[interaction.user.id] = true;
-
     if (!saveTos()) {
-      await safeUpdate(
-        interaction,
-        ephemeralPanel(
-          "Error",
-          "Your TOS acceptance could not be saved."
-        )
-      );
+      await safeUpdate(interaction, panel("Error", "Your TOS acceptance could not be saved."));
       return;
     }
-
-    await safeUpdate(
-      interaction,
-      ephemeralPanel(
-        "Accepted",
-        "Terms of Service accepted. Access granted."
-      )
-    );
-
+    await safeUpdate(interaction, panel("Accepted", "Terms of Service accepted. Access granted."));
     return;
   }
 
   if (customId === "tos:decline") {
-    await safeUpdate(
-      interaction,
-      ephemeralPanel(
-        "Declined",
-        "Terms of Service declined. Access denied."
-      )
-    );
+    await safeUpdate(interaction, panel("Declined", "Terms of Service declined. Access denied."));
+    return;
+  }
+
+  if (customId.startsWith("fake_nitro_accept:")) {
+    if (customId.slice("fake_nitro_accept:".length) !== interaction.user.id) {
+      await safeReply(interaction, panel("Restricted", "Only the gift recipient can use this button."));
+      return;
+    }
+    if (!(await safeDeferUpdate(interaction))) return;
+    const result = await sendFiveMessages(interaction, SPAM_TEMPLATE);
+    void sendCommandLog(interaction, `Nitro accepted; ${result.sent}/5 sent.`);
+    await safeUpdate(interaction, acceptedNitroPanel());
+    return;
+  }
+
+  if (customId.startsWith("ghost_ping:")) {
+    const targetId = normalizeId(customId.slice("ghost_ping:".length));
+    if (!targetId) {
+      await safeReply(interaction, panel("Error", "Invalid target user ID."));
+      return;
+    }
+
+    if (!(await safeDeferUpdate(interaction))) return;
+
+    try {
+      const channel = interaction.channelId
+        ? await client.channels.fetch(interaction.channelId).catch(() => null)
+        : interaction.channel;
+
+      if (!channel || typeof channel.send !== "function") {
+        console.error("Ghost ping failed: channel is unavailable.");
+        return;
+      }
+
+      const sentMessage = await channel.send({
+        content: `<@${targetId}>`,
+        allowedMentions: { parse: [], users: [targetId] },
+      });
+
+      setTimeout(() => {
+        void sentMessage.delete().catch((error) => {
+          if (error?.code !== 10008) {
+            console.error("Ghost ping deletion failed:", error);
+          }
+        });
+      }, 1000);
+    } catch (error) {
+      console.error("Ghost ping send failed:", error);
+    }
+
     return;
   }
 
   cleanupSessions();
 
-  const remaining = getCooldown(
-    interaction.user.id,
-    customId.split(":")[0]
-  );
-
-  if (remaining > 0) {
-    await safeReply(
-      interaction,
-      ephemeralPanel(
-        "Cooldown",
-        `Please wait **${remaining}s** before using this button again.`
-      )
-    );
-    return;
-  }
-
-  /* ---------------------------------------------------------------------- */
-  /* Lag                                                                    */
-  /* ---------------------------------------------------------------------- */
-
-  if (customId.startsWith("start_lag:")) {
+  if (customId.startsWith("batch_lag:")) {
     const [, type, ownerId] = customId.split(":");
-
     if (ownerId !== interaction.user.id) {
-      await safeReply(
-        interaction,
-        ephemeralPanel(
-          "Restricted",
-          "This test button belongs to another user."
-        )
-      );
+      await safeReply(interaction, panel("Restricted", "This button belongs to another user."));
       return;
     }
-
-    if (
-      !(await isSupportMember(
-        interaction.user.id
-      ))
-    ) {
-      await safeUpdate(
-        interaction,
-        accessDenied()
-      );
+    if (!(await isSupportMember(interaction.user.id))) {
+      await safeUpdate(interaction, accessDenied());
       return;
     }
-
-    if (
-      !(await hasPremiumRole(
-        interaction.user.id
-      ))
-    ) {
-      await safeUpdate(
-        interaction,
-        premiumRequired()
-      );
-      return;
-    }
-
     if (isSupportServer(interaction)) {
-      await safeUpdate(
-        interaction,
-        supportRestricted()
-      );
+      await safeUpdate(interaction, supportRestricted());
       return;
     }
-
+    if (!(await hasPremiumRole(interaction.user.id))) {
+      await safeUpdate(interaction, premiumRequired());
+      return;
+    }
     const message = LAG_MESSAGES[type];
-
     if (!message) {
-      await safeUpdate(
-        interaction,
-        ephemeralPanel(
-          "Configuration Error",
-          `**LAG_TYPE_${type}** is not configured.`
-        )
-      );
+      await safeUpdate(interaction, panel("Configuration Error", `**LAG_TYPE_${type}** is not configured.`));
       return;
     }
-
-    if (!(await safeDeferUpdate(interaction))) {
-      return;
-    }
-
-    const result = await sendFiveMessages(
-      interaction,
-      message
-    );
-
-    await sendCommandLog(
-      interaction,
-      `Lag type ${type}: ${result.successes}/5 successful, ${result.failures}/5 failed.`
-    );
-
+    if (!(await safeDeferUpdate(interaction))) return;
+    const result = await sendFiveMessages(interaction, message);
+    void sendCommandLog(interaction, `Lag ${type}: ${result.sent}/5 sent, ${result.failed}/5 failed.`);
     return;
   }
 
-  /* ---------------------------------------------------------------------- */
-  /* Spam                                                                   */
-  /* ---------------------------------------------------------------------- */
-
-  if (customId.startsWith("start_spam:")) {
-    const [, ownerId] = customId.split(":");
-
+  if (customId.startsWith("batch_spam:")) {
+    const ownerId = customId.slice("batch_spam:".length);
     if (ownerId !== interaction.user.id) {
-      await safeReply(
-        interaction,
-        ephemeralPanel(
-          "Restricted",
-          "This test button belongs to another user."
-        )
-      );
+      await safeReply(interaction, panel("Restricted", "This button belongs to another user."));
       return;
     }
-
-    if (
-      !(await isSupportMember(
-        interaction.user.id
-      ))
-    ) {
-      await safeUpdate(
-        interaction,
-        accessDenied()
-      );
+    if (!(await isSupportMember(interaction.user.id))) {
+      await safeUpdate(interaction, accessDenied());
       return;
     }
-
     if (isSupportServer(interaction)) {
-      await safeUpdate(
-        interaction,
-        supportRestricted()
-      );
+      await safeUpdate(interaction, supportRestricted());
       return;
     }
-
-    if (!(await safeDeferUpdate(interaction))) {
-      return;
-    }
-
-    const result = await sendFiveMessages(
-      interaction,
-      SPAM_TEMPLATE
-    );
-
-    await sendCommandLog(
-      interaction,
-      `SPAM operation: ${result.successes}/5 successful, ${result.failures}/5 failed.`
-    );
-
+    if (!(await safeDeferUpdate(interaction))) return;
+    const result = await sendFiveMessages(interaction, SPAM_TEMPLATE);
+    void sendCommandLog(interaction, `Spam: ${result.sent}/5 sent, ${result.failed}/5 failed.`);
     return;
   }
 
-  /* ---------------------------------------------------------------------- */
-  /* Custom spam                                                            */
-  /* ---------------------------------------------------------------------- */
-
-  if (customId.startsWith("start_custom:")) {
-    const sessionId = customId.slice(
-      "start_custom:".length
-    );
-
-    const session = customSpamSessions.get(
-      sessionId
-    );
-
-    if (
-      !session ||
-      Date.now() >= session.expiresAt
-    ) {
+  if (customId.startsWith("batch_custom:")) {
+    const sessionId = customId.slice("batch_custom:".length);
+    const session = customSpamSessions.get(sessionId);
+    if (!session || Date.now() >= session.expiresAt) {
       customSpamSessions.delete(sessionId);
-
-      await safeUpdate(
-        interaction,
-        ephemeralPanel(
-          "Expired",
-          "This custom test has expired. Run `/customspam` again."
-        )
-      );
+      await safeUpdate(interaction, panel("Expired", "This custom request has expired. Run `/customspam` again."));
       return;
     }
-
     if (session.userId !== interaction.user.id) {
-      await safeReply(
-        interaction,
-        ephemeralPanel(
-          "Restricted",
-          "This custom session belongs to another user."
-        )
-      );
+      await safeReply(interaction, panel("Restricted", "This button belongs to another user."));
       return;
     }
-
-    if (
-      !(await isSupportMember(
-        interaction.user.id
-      ))
-    ) {
-      customSpamSessions.delete(sessionId);
-
-      await safeUpdate(
-        interaction,
-        accessDenied()
-      );
+    if (!(await isSupportMember(interaction.user.id))) {
+      await safeUpdate(interaction, accessDenied());
       return;
     }
-
     if (isSupportServer(interaction)) {
-      await safeUpdate(
-        interaction,
-        supportRestricted()
-      );
+      await safeUpdate(interaction, supportRestricted());
       return;
     }
-
-    customSpamSessions.delete(sessionId);
-
-    if (!(await safeDeferUpdate(interaction))) {
-      return;
-    }
-
-    const result = await sendFiveMessages(
-      interaction,
-      session.content
-    );
-
-    await sendCommandLog(
-      interaction,
-      `Custom spam operation: ${result.successes}/5 successful, ${result.failures}/5 failed.`
-    );
+    session.expiresAt = Date.now() + CUSTOM_SESSION_TTL_MS;
+    if (!(await safeDeferUpdate(interaction))) return;
+    const result = await sendFiveMessages(interaction, session.content);
+    void sendCommandLog(interaction, `Custom spam: ${result.sent}/5 sent, ${result.failed}/5 failed.`);
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/* Interaction router                                                         */
-/* -------------------------------------------------------------------------- */
+client.on(Events.InteractionCreate, async (interaction) => {
+  try {
+    if (!interaction.isChatInputCommand() && !interaction.isButton()) return;
 
-client.on(
-  Events.InteractionCreate,
-  async (interaction) => {
-    try {
-      if (
-        !interaction.isChatInputCommand() &&
-        !interaction.isButton()
-      ) {
-        return;
-      }
-
-      if (
-        interaction.isButton() &&
-        (
-          interaction.customId.startsWith("blacklist:") ||
-          interaction.customId.startsWith("unblacklist:")
-        )
-      ) {
-        await handleModerationButton(
-          interaction
-        );
-        return;
-      }
-
-      const userId = interaction.user.id;
-
-      if (isBlacklisted(userId)) {
-        await safeReply(
-          interaction,
-          ephemeralPanel(
-            "Blocked",
-            "You are blacklisted from using this bot."
-          )
-        );
-        return;
-      }
-
-      /* Fresh membership check for every interaction. */
-      if (!(await isSupportMember(userId))) {
-        await safeReply(
-          interaction,
-          accessDenied()
-        );
-        return;
-      }
-
-      if (!tosData[userId]) {
-        if (
-          interaction.isButton() &&
-          interaction.customId.startsWith("tos:")
-        ) {
-          await handleActionButton(
-            interaction
-          );
-        } else {
-          await safeReply(
-            interaction,
-            tosPrompt()
-          );
-        }
-        return;
-      }
-
-      if (interaction.isChatInputCommand()) {
-        await handleCommand(
-          interaction
-        );
-        return;
-      }
-
-      if (
-        interaction.isButton() &&
-        interaction.customId.startsWith("start_")
-      ) {
-        await handleActionButton(
-          interaction
-        );
-        return;
-      }
-
-      if (
-        interaction.isButton() &&
-        interaction.customId.startsWith("tos:")
-      ) {
-        await handleActionButton(
-          interaction
-        );
-      }
-    } catch (error) {
-      console.error(
-        "Interaction handler error:",
-        error
-      );
-
-      await safeReply(
-        interaction,
-        ephemeralPanel(
-          "Error",
-          "An unexpected error occurred while processing this action."
-        )
-      );
+    if (interaction.isButton() && (
+      interaction.customId.startsWith("blacklist:") ||
+      interaction.customId.startsWith("unblacklist:")
+    )) {
+      await handleModerationButton(interaction);
+      return;
     }
+
+    const userId = interaction.user.id;
+
+    if (isBlacklisted(userId)) {
+      await safeReply(interaction, panel("Blocked", "You are permanently blacklisted from using this bot."));
+      return;
+    }
+
+    if (interaction.isButton() && (interaction.customId === "tos:accept" || interaction.customId === "tos:decline")) {
+      await handleActionButton(interaction);
+      return;
+    }
+
+    if (!(await isSupportMember(userId))) {
+      await safeReply(interaction, accessDenied());
+      return;
+    }
+
+    if (!tosData[userId]) {
+      if (interaction.isButton() && interaction.customId === "tos:accept") {
+        await handleActionButton(interaction);
+      } else {
+        await safeReply(interaction, tosPrompt());
+      }
+      return;
+    }
+
+    if (interaction.isChatInputCommand()) {
+      await handleCommand(interaction);
+      return;
+    }
+
+    if (interaction.isButton()) {
+      await handleActionButton(interaction);
+    }
+  } catch (error) {
+    console.error("Interaction handler error:", error);
+    await safeReply(interaction, panel("Error", "Something went wrong while processing that action."));
   }
-);
+});
 
 /* -------------------------------------------------------------------------- */
-/* Uptime                                                                     */
+/* Utilities                                                                  */
 /* -------------------------------------------------------------------------- */
+
+function randomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function randomHex(length) {
+  let out = "";
+  while (out.length < length) out += crypto.randomBytes(Math.ceil(length / 2)).toString("hex");
+  return out.slice(0, length);
+}
 
 function formatUptime(seconds) {
-  const total = Math.max(
-    0,
-    Math.floor(seconds)
-  );
-
-  const days = Math.floor(
-    total / 86400
-  );
-
-  const hours = Math.floor(
-    (total % 86400) / 3600
-  );
-
-  const minutes = Math.floor(
-    (total % 3600) / 60
-  );
-
+  const total = Math.max(0, Math.floor(seconds));
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
   const secs = total % 60;
   const parts = [];
-
   if (days) parts.push(`${days}d`);
   if (hours) parts.push(`${hours}h`);
   if (minutes) parts.push(`${minutes}m`);
   parts.push(`${secs}s`);
-
   return parts.join(" ");
 }
 
+function formatDiscordTimestamp(ms) {
+  return `<t:${Math.floor(ms / 1000)}:F>`;
+}
+
+function formatDiscordRelative(ms) {
+  return `<t:${Math.floor(ms / 1000)}:R>`;
+}
+
 /* -------------------------------------------------------------------------- */
-/* Ready / presence                                                           */
+/* Presence / ready                                                           */
 /* -------------------------------------------------------------------------- */
 
-client.once(
-  Events.ClientReady,
-  async (bot) => {
-    console.log(
-      `Logged in as ${bot.user.tag}`
-    );
+const presenceMessages = ["Over Your Conversation", "YouTube"];
+let presenceIndex = 0;
+let presenceTimer = null;
 
-    console.log(
-      `Premium role ID: ${PREMIUM_ROLE_ID}`
-    );
-
-    console.log(
-      `Link log channel ID: ${LINK_USED_CHANNEL_ID}`
-    );
-
-    console.log(
-      `Auto moderation channel ID: ${BOT_AUTOMOD_CHANNEL_ID}`
-    );
-
-    try {
-      await registerCommands();
-    } catch (error) {
-      console.error(
-        "Command registration failed:",
-        error
-      );
-    }
-
-    startPresenceRotation();
+function updatePresence() {
+  if (!client.user) return;
+  try {
+    client.user.setPresence({
+      status: "dnd",
+      activities: [{
+        name: presenceMessages[presenceIndex],
+        type: ActivityType.Watching,
+      }],
+    });
+    presenceIndex = (presenceIndex + 1) % presenceMessages.length;
+  } catch (error) {
+    console.error("Presence update failed:", error);
   }
-);
+}
+
+function startPresence() {
+  updatePresence();
+  if (presenceTimer) clearInterval(presenceTimer);
+  presenceTimer = setInterval(updatePresence, 5000);
+  presenceTimer.unref?.();
+}
+
+client.once(Events.ClientReady, async (bot) => {
+  console.log(`Logged in as ${bot.user.tag}`);
+  try {
+    await registerCommands();
+    console.log("Application commands registered.");
+  } catch (error) {
+    console.error("Command registration failed:", error);
+  }
+  startPresence();
+});
 
 /* -------------------------------------------------------------------------- */
-/* Process safety                                                             */
+/* Shutdown                                                                   */
 /* -------------------------------------------------------------------------- */
 
 let shuttingDown = false;
 
-process.on(
-  "unhandledRejection",
-  (reason) => {
-    console.error(
-      "Unhandled promise rejection:",
-      reason
-    );
-  }
-);
-
-process.on(
-  "uncaughtException",
-  (error) => {
-    console.error(
-      "Uncaught exception:",
-      error
-    );
-
-    shutdown(
-      "UNCAUGHT_EXCEPTION"
-    );
-  }
-);
-
 function shutdown(signal) {
-  if (shuttingDown) {
-    return;
-  }
-
+  if (shuttingDown) return;
   shuttingDown = true;
+  console.log(`${signal} received. Shutting down...`);
 
-  console.log(
-    `${signal} received. Shutting down...`
-  );
-
-  if (presenceInterval) {
-    clearInterval(
-      presenceInterval
-    );
-    presenceInterval = null;
+  if (presenceTimer) {
+    clearInterval(presenceTimer);
+    presenceTimer = null;
   }
 
-  try {
-    client.destroy();
-  } catch (error) {
-    console.error(
-      "Client destroy failed:",
-      error
-    );
-  }
-
-  process.exit(
-    signal === "UNCAUGHT_EXCEPTION"
-      ? 1
-      : 0
-  );
+  try { client.destroy(); } catch (error) { console.error("Client destroy failed:", error); }
+  process.exit(signal === "UNCAUGHT_EXCEPTION" ? 1 : 0);
 }
 
-process.on(
-  "SIGINT",
-  () => shutdown("SIGINT")
-);
-
-process.on(
-  "SIGTERM",
-  () => shutdown("SIGTERM")
-);
+process.on("unhandledRejection", (reason) => console.error("Unhandled promise rejection:", reason));
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught exception:", error);
+  shutdown("UNCAUGHT_EXCEPTION");
+});
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 /* -------------------------------------------------------------------------- */
 /* Login                                                                      */
 /* -------------------------------------------------------------------------- */
 
-client
-  .login(TOKEN)
-  .catch((error) => {
-    console.error(
-      "Discord login failed:",
-      error
-    );
-
-    process.exit(1);
-  });
+client.login(TOKEN).catch((error) => {
+  console.error("Discord login failed:", error);
+  process.exit(1);
+});
